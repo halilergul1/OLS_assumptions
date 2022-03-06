@@ -1,0 +1,254 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Article: Economic Discontent as a Mobilizer: Unemployment and Voter Turnout
+
+# authors: Barry C. Burden and Amber Wichowsky
+
+# Argument: The model that I will check for Gauss-Markov assumptions focuses on the relationship between unemployment rate and voter turnout. As opposed to withdrawal thesis that as things worsen, fewer people vote, the authors argue that economic hardship will increase voter turnout. So, there is a positive and significant relationship between the two.
+
+# Data: Data encompasses presidential elections from 1976 to 2008 at  reliable state-level and especially county-level data from the U.S. Bureau of Labor Statistics.
+
+
+#The OLS model
+```{r}
+
+library(readstata13)
+library(ggplot2)
+library(car)
+library(MASS)
+library(margins)
+
+
+getwd()
+
+county.data <- read.dta13("BWJOPcountyreplicationdata.dta")
+
+#Here is the OLS model, weighted by population in county
+
+table1.model1 <- lm(Turnout ~ Unemploy_County_new + Unemploy_State + PcntBlack + ZPcntHSGrad +
+                       AdjIncome + closeness + GubElection + SenElection +
+                       Yr2008 + Yr2004 + Yr2000 + Yr96 + Yr92 + Yr88 + Yr84 + Yr80 +  
+                       factor(FIPS_County), data=county.data, weights=as.numeric(pop))
+
+table1.model1$coefficients[1:9]
+
+m1w.vcovCL <- cluster.vcov(table1.model1, county.data$FIPS_County, df_correction = TRUE)
+ses.m1w <- sqrt(diag(m1w.vcovCL))
+ses.m1w[1:9]
+
+
+```
+
+# Gauss-Markov assumptions
+
+- The model is linear in the parameters
+- No endogeneity in the model (independent variable $X$ and $\epsilon$ are not correlated)
+- Errors are normally distributed with constant variance
+- No autocorrelation in the errors
+- No multicollinearity between variable
+
+# STEP1: Independence of observations (aka no autocorrelation).  This is to test the relationship between independent variables. This is to ensure that there is no multicollinearity between indpendent variables.
+```{r}
+
+table1_vif <- lm(Turnout ~ Unemploy_County_new + Unemploy_State + PcntBlack + ZPcntHSGrad +
+                       AdjIncome + closeness + GubElection + SenElection, data=county.data, weights=as.numeric(pop))
+
+vif(table1_vif)
+
+# Results of "Variance inflation factor" suggests that there is no multicollinearity 
+# as there is no problematic amount of collinearity (all of them are below 5). If there was a problematic case then the concerned variables should be removed as to avoid redundancy.
+
+
+```
+
+
+# STEP2: Normality. This is to check whether dependent variable and independent variables are normally distributed
+```{r}
+
+vars = c('Turnout', 'Unemploy_County_new', 'Unemploy_State', 'PcntBlack', 'ZPcntHSGrad', 'AdjIncome', 'closeness','GubElection', 'SenElection')
+
+for(var in vars) plot(density(county.data[,var], na.rm = TRUE), main = var)
+
+summary(table1.model1[, vars])
+
+# Dependent variable (percentage turnout in county) is normally distributed and there is no problem. However, some of the independent variables are problematic as their distributions are skewed to one side and do not approximate normal distribution. Indeed, these do not necessarily have to distributed normally, but altering them in a way that they distributed normally will be good for the OLS assumptions. These variables are also not strictly positive. So, taking the log makes sense.
+
+df <- county.data %>% 
+  select(Turnout, Unemploy_County_new, Unemploy_State, 
+         PcntBlack, ZPcntHSGrad, AdjIncome, 
+         closeness, GubElection, SenElection)
+
+mydf <- na.omit(df)
+
+mod2 = lm(Turnout ~ I(log(Unemploy_County_new - min(Unemploy_County_new) + .01)) + I(log(Unemploy_State - min(Unemploy_State) + .01)) + I(log(PcntBlack - min(PcntBlack) + .01)) + I(log(ZPcntHSGrad - min(ZPcntHSGrad) + .01)) + I(log(AdjIncome - min(AdjIncome) + .01)) + I(log(closeness - min(closeness) + .01)), data = mydf)
+
+
+plot(mod2, 2)
+boxcox(mod2)
+summary(mod2)
+
+
+coef(mod2)[2]
+
+ef = (mydf$Unemploy_County_new - min(mydf$Unemploy_County_new) + .01)^coef(mod2)[2]
+plot(mydf$Unemploy_County_new, ef) 
+ef.lower = (mydf$Unemploy_County_new - min(mydf$Unemploy_County_new) + .01)^(coef(mod2)[2] - 1.96*coef(summary(mod2))[2, "Std. Error"])
+ef.upper = (mydf$Unemploy_County_new - min(mydf$Unemploy_County_new) + .01)^(coef(mod2)[2] + 1.96*coef(summary(mod2))[2, "Std. Error"])
+plot(mydf$Unemploy_County_new, ef)
+segments(x0 = mydf$Unemploy_County_new, y0 = ef.lower, x1 = mydf$Unemploy_County_new, y1 = ef.upper)
+x=cplot(mod2, x = 'Unemploy_County_new', what = 'effect')
+x[,2:4] = exp(x[,2:4])
+plot(x[,1], x[,2])
+segments(x0=x[,1], x1=x[,1], y0=x[,3], y1=x[,4])
+
+### As unemployment on country level goes up, its marginal effect increases but there seems to be diminishing returns.
+
+
+```
+
+
+#STEP3: Assessing the homoscedasticity assumption; whether errors are normally distributed with constant variance
+```{r}
+
+summary(table1.model1)
+
+plot(table1.model1, 2)
+
+# Looking for QQplot is important for this model as the dependent variable is percentage turnout in county. One assumption in OLS is that the range of possible outcomes is continuous and infinite. The variable voter turnout cannot fulfill this assumption due to the nature of its scale and scope. That is why I suspect that tails of QQplot in this model is problematic.
+
+#In the Normal Q-Qplot, we can see that the real residuals from our model does not form a perfectly fit line. Especially tails are problematic. This might be suggesting that there is a pattern in the residuals and that they are not equally spread around the y = 0 line and this might suggest that the variance is not constant. This shows that authors overlook to check about the distribution of errors. But this is no surprise because of the measure of voter turnout.
+
+# To improve the model so that Q-Q plot gives constant variance in errors, I need Variance Stabilizing Transformations to induce normality.
+
+# I transform outcome to $\frac{y^\lambda - 1}{\lambda}$.
+
+
+#Box-cox transformation
+library(MASS)
+
+bc = boxcox(table1.model1, lambda = seq(0.4, 0.6, by = 0.05), plotit = TRUE)
+
+best.lam = bc$x[which(bc$y==max(bc$y))] #best lambda I have is 0.52..
+
+model_cox = lm((((Turnout ^ 0.5) - 1) / 0.5) ~ Unemploy_County_new + Unemploy_State + PcntBlack + ZPcntHSGrad +
+                       AdjIncome + closeness + GubElection + SenElection +
+                       Yr2008 + Yr2004 + Yr2000 + Yr96 + Yr92 + Yr88 + Yr84 + Yr80 +  
+                       factor(FIPS_County), data=county.data, weights=as.numeric(pop))
+
+qqPlot(table1.model1)
+plot(model_cox, 2)
+
+# Q-Q plot improved a little bit but still tails needs to be fixed because error distribution is not perfectly normal.
+```
+
+#STEP3 (Cont.)
+```{r}
+
+
+
+par(mfrow=c(2,2))
+plot(table1.model1)
+par(mfrow=c(1,1))
+
+
+
+# Red lines in these plots are important as they represent the mean of the residuals.A horizontal line, without distinct patterns Residuals vs Fitted plot shows linear relationship, which is good. There seems to be no serious bias in residuals.
+# Residuals vs Leverage plot shows extreme and influential values that might influence the regression results when included or excluded from the analysis. It is also centered around zero. But because of the situation of QQ plot, I can say that the model partially meets the assumption of homoscedasticity.
+
+```
+
+
+#STEP4: Linearity; The relationship between the predictor (x) and the outcomes (y) is assumed to be linear
+```{r}
+
+# In this chunk, I checked one by one the relationship between independent variables and dependent variable.  Because of the nature of some variables, I take the log of them as a convenient means of inducing their skewed distribution. In general, there seems to be somewhat linear relationship between explanatory and response variables. But some of them are really problematic such as the relation between turnout rate and income. Violating nonlinearity put this model in such a suspected position that coefficients for problematic ones become meaningless.
+
+ggplot(county.data, aes(x = Unemploy_County_new, y = Turnout), log="x") +
+  geom_point() +
+  scale_x_continuous(trans = "log10") +
+  geom_smooth()
+
+ggplot(county.data, aes(x = Unemploy_State, y = Turnout)) +
+  geom_point() +
+  scale_x_continuous(trans = "log10") +
+  xlab("x-log10") +
+  geom_smooth()
+
+ggplot(county.data, aes(x = PcntBlack, y = Turnout)) +
+  geom_point() +
+  scale_x_continuous(trans = "log10") +
+  xlab("x-log10") +
+  geom_smooth()
+
+ggplot(county.data, aes(x = ZPcntHSGrad, y = Turnout)) +
+  geom_point() +
+  geom_smooth()
+
+ggplot(county.data, aes(x = AdjIncome, y = Turnout)) +
+  geom_point() +
+  scale_x_continuous(trans = "log10") +
+  xlab("x-log10") +
+  geom_smooth()
+
+ggplot(county.data, aes(x = closeness, y = Turnout)) +
+  geom_point() +
+  geom_smooth()
+
+
+
+
+```
+
+
+#STEP5: Endogeneity (to check whether error terms are corraleted with explanatory variables.)
+```{r}
+#### If this is nonzero, then it is problematic
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+
+table1.model1 <- lm(Turnout ~ Unemploy_County_new + Unemploy_State + PcntBlack + ZPcntHSGrad +
+                       AdjIncome + closeness + GubElection + SenElection +
+                       Yr2008 + Yr2004 + Yr2000 + Yr96 + Yr92 + Yr88 + Yr84 + Yr80 +  
+                       factor(FIPS_County), data=county.data, weights=as.numeric(pop))
+
+# To avoid "incompatible dimensions" problem, I subset my data into new dataframe and omit all NA values.
+
+df <- county.data %>% 
+  select(Turnout, Unemploy_County_new, Unemploy_State, PcntBlack, ZPcntHSGrad, AdjIncome, closeness, GubElection, SenElection)
+
+
+df_new <- na.omit(df)
+
+# Ideally, we expect  from this Endogeneity check via cor argument to be "0". Here it is "-0.7" which is not good because Gauss-Markov assumptions suggest that "E[€i | xi] = 0". This problem might stem from two possible reasons as far as I can see. First, there might be an omitted variable (or lurking variable, in the case of voter turnout, one potential variable might be the political culture or attitude toward voting) that are correlated with our xterms and response variable, then violation could occur. Omitted variable causes serious problem as it tends to incorporate into error term. Second potential reason might be that there is a measurement error especially in the independent variables of this model. Besides, I do not think that this model might harbor a risk of "reverse causality".
+
+cor(df_new[,'AdjIncome'], summary(table1.model1)$residuals)
+```
+
+
+#STEP6: This is to check for autocorrelation. Because this is a time-series panel data, autocorrelation is the likely outcome. 
+```{r}
+
+library(dynlm)
+library(AER)
+
+mod.dyn = dynlm(Turnout ~ Unemploy_County_new + Unemploy_State + PcntBlack + ZPcntHSGrad +
+                       AdjIncome + closeness + GubElection + SenElection +
+                       Yr2008 + Yr2004 + Yr2000 + Yr96 + Yr92 + Yr88 + Yr84 + Yr80 +  
+                       factor(FIPS_County), data=county.data, weights=as.numeric(pop))
+
+summary(mod.dyn)
+durbinWatsonTest(mod.dyn)  #p-value is so low so this points to the existence of autocorrelation. This problem is especially important in panel data as it  might cause bias in standard error and lead to inefficient results.
+
+
+```
+
+
+
+
+
+
+
